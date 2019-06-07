@@ -1,0 +1,1374 @@
+---
+title: "A retrospective analysis of NTM infection and monochloramine disinfection of municipal drinking water in Michigan "
+author: "Nadine Kotlarz"
+date: "June 5, 2019"
+output: word_document
+---
+
+# Libraries
+```{r setwd, eval=F}
+knitr::opts_knit$set(root.dir = "C:/Users/nkotlar/Documents/Research/RESULTS/NTM_EPI/Rmarkdown")
+
+#data wrangling
+library(dplyr)
+#install.packages("tidyr")
+library(tidyr)
+library(stringr)
+library(stringi)
+library(knitr)
+
+#for loops
+#install.packages("doParallel")
+library(doParallel)
+#install.packages("data.table")
+library(data.table)
+
+#mapping
+#install.packages("gmapsdistance")
+library(gmapsdistance)
+#install.packages("ggmap")
+library(ggmap)
+#install.packages("maptools")
+library(maptools)
+#install.packages("rgeos")
+library(rgeos) #needed for gContains command
+
+#plotting
+library(ggplot2)
+#install.packages("rgdal")
+library(rgdal)
+library(scales)
+
+#modeling
+#install.packages("lme4")
+library(lme4)
+
+#matching
+#install.packages("MatchIt")
+#install.packages("optmatch")
+library(MatchIt)
+library(optmatch)
+library(RItools) #visualizing how well matching performed
+#install.packages("glmnet")
+library(glmnet)
+
+#install.packages("XML")
+library(XML)
+library(RCurl)
+
+#install.packages("lsmeans")
+library(lsmeans)
+
+#install.packages("oddsratio")
+library(oddsratio)
+
+library(xlsx)
+```
+
+# Filtering records
+
+## 1. Create sample source groups /records
+```{r create_source_groups, echo=F, warning=FALSE, include=FALSE, eval=FALSE}
+   Old<-Sys.time()
+
+# # Read in clinical file
+   clinical<-read.csv("full_dataset_with_clinical_without_speciesid_inference.csv", 
+                      header=T, 
+                      row.names=1, 
+                      na.strings="NA", 
+                      colClasses=rep("character",8)) #this file provided by M. Zimbric
+ 
+   # check file
+   length(unique(clinical$study_id))                                     #29,942 patients
+   length(unique(clinical$sample_id))                                    #61,786 records
+   length(unique(filter(clinical, result=="positive")$sample_id))        #2470 positives
+   length(unique(filter(clinical, result=="negative")$sample_id))        #58910 negatives
+   length(unique(filter(clinical, result=="unknown")$sample_id))         #406 unknowns
+ 
+ # Remove all unknown results from dataset
+     
+   clinical<-filter(clinical, result=="positive" | result=="negative")   #remove all unknown results
+ 
+   # check file
+   length(unique(clinical$study_id))                                     #29,891 patients
+   length(unique(clinical$sample_id))                                    #61,380 records
+   length(unique(filter(clinical, result=="positive")$sample_id))        #2470
+   length(unique(filter(clinical, result=="negative")$sample_id))        #58910
+ 
+ # Make result binary (positive=1, negative=0)
+     
+   clinical$result<-sapply(clinical$result,function(x){gsub("negative","0",ignore.case=T,x)}) #make binary
+   clinical$result<-sapply(clinical$result,function(x){gsub("positive","1",ignore.case=T,x)}) #make binary
+   clinical$result<-as.factor(clinical$result) #make factor
+   
+     
+ # Create source groups #Must do this now to be able to remove M. gordonae contaminants later
+ 
+   #test_sites<-select(clinical,source)
+   #test_sites<-distinct(test_site_category)
+   #nrow(test_sites) #382 sites
+   
+   #read in test site locations
+   
+   clinical$source_group<-clinical$source                          #copy source column over to another column
+
+   # 1. lung
+
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^BAL$|^BRON BX$|^BRONCH$|^BRONCH BRUSH$|^BRONCH L$|^BRONCH R$|^BRONCHI$|^BRONCHI, LEF$|^BRONCHI, RIG$|^BRONCHIAL BI$|^BRONCHIAL WA$|^BRONCHO-ALVE$|^BRWSH$|^CHEST$|^CHEST T$|^CHEST TUBE$|^ENDOTR T$|^ENDOTRAC$|^ENDOTRACHEAL$|^ENDOTRACHIAL$|^LEFT LUNG$|^LEFT LUNG, L$|^LEFT LUNG, U$|^LUNG$|^LUNG L$|^LUNG LLL$|^LUNG LUL$|^LUNG R$|^LUNG RLL$|^LUNG RUL$|^PLEURAL$|^PLEURAL FLUI$|^RIGHT LUNG$|^RIGHT LUNG,$|^SPUT$|^SPUTIND$|^SPUTUM$|^SPUTUM, INDU$|^THORACENTESI$|^THORACIC$|^THORFL$|^TRACH$|^TRACHASP$|^TRACHEAL$|^TRACHEAL ASP$)","Lung",ignore.case=T,x)})
+ 
+   # 2. gastrointestinal
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^ABDFL$|^ABDOMEN$|^ABDOMINA$|^ABDOMINAL$|^ABDOMINAL FL$|^ASCITES$|^ASCITES FLUI$|^BILE$|^COLON$|^DUODENAL ASP$|^ESOPHAGUS$|^FECES$|^GALLBLADDER$|^GASTRIC$|^GASTRIC FLUI$|^GLBLAD$|^LIVER$|^PANCRE$|^PANCREAS$|^PARACENTESIS$|^PERIT$|^PERITON$|^PERITONEAL$|^PERITONEAL D$|^PERITONEAL F$|^RECTAL$|^RIGHT COLON$|^ULCER$)","Gastrointestinal",ignore.case=T,x)})
+    
+   # 3. lymphatic
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^LYMPH NODE$|^LYNODE$|^NODE$)","Lymphatic",ignore.case=T,x)})
+    
+   # 4. blood and cardiovascular
+  
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^AORTIC$|^ARTERY$|^BLD$|^BLOOD$|^BONE MAR$|^BONE MARROW$|^CLOT$|^HEART$|^MITRAL V$|^MITRAL VALVE$|^PERICAR$|^PERICARD$|^PERICARDIAL$|^PERICARDIAL $|^PERICARDIUM$|^PLASMA$|^SERUM$|^VEIN$)","Blood and cardiovascular",ignore.case=T,x)})
+    
+   # 5. skin and musculoskeletal
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^ANKLE$|^ANKLE L$|^ANKLE R$|^ARM$|^ARM L$|^ARM R$|^AXILLA$|^BACK$|^BONE$|^BRACHIAL$|^BREAST$|^BREAST L$|^BREAST R$|^BREAST, LEFT$|^BREAST, RIGH$|^BURSA$|^BUTT$|^BUTT L$|^BUTTOCKS$|^BUTTOCKS, LE$|^BUTTOCKS, RI$|^CALF$|^CALF L$|^CALF R$|^CARTILAG$|^CARTILAGE$|^CHEEK L$|^CHEEK R$|^CHIN$|^CLAVICLE$|^CONJUNCTIVA$|^CORN$|^CORN DON$|^CORN L$|^CORN R$|^CORNEA$|^CORNEAL TRAN$|^DISC$|^EAR$|^EAR L$|^EAR MIDL$|^EAR MIDR$|^EAR R$|^ELBOW$|^ELBOW L$|^ELBOW R$|^EYE$|^EYE R$|^FACE$|^FEMORAL$|^FEMUR$|^FEMUR L$|^FEMUR R$|^FIBULA$|^FING$|^FINGER$|^FINGER NAIL$|^FLANK$|^FOOT$|^FOOT L$|^FOOT R$|^FOREARM$|^GINGIVA$|^GROIN$|^HAND$|^HAND L$|^HAND R$|^HIP$|^HIP L$|^HIP R$|^ILIAC CR$|^INDEX FINGER$|^INGUINAL$|^JAW$|^JOINT$|^JOINT FLUID$|^KNEE$|^KNEE L$|^KNEE R$|^LEFT ANKLE$|^LEFT ARM$|^LEFT CALF$|^LEFT CHEEK$|^LEFT CLAVICL$|^LEFT EAR$|^LEFT ELBOW$|^LEFT EYE$|^LEFT FEMUR$|^LEFT FOOT$|^LEFT HAND$|^LEFT HEEL$|^LEFT HIP$|^LEFT KNEE$|^LEFT LEG$|^LEFT PALM$|^LEFT SHOULDE$|^LEFT TOE$|^LEFT WRIST$|^LEG$|^LEG L$|^LEG R$|^LIGAMENT$|^LIP$|^LOWER BACK$|^MAND$|^MANDIBLE$|^METATARS$|^MIDDLE EAR F$|^MOUTH$|^MUCOSA$|^NAIL$|^NECK$|^OCULAR$|^ORBIT$|^PALATE$|^PALM L$|^PATELLA$|^PERIANAL$|^PERINEAL$|^PERINEUM$|^PERIRECTAL$|^PERITONSILLA$|^PHARYNX$|^RIB$|^RIGHT ANKLE$|^RIGHT ARM$|^RIGHT CHEEK$|^RIGHT CLAVIC$|^RIGHT EAR$|^RIGHT ELBOW$|^RIGHT EYE$|^RIGHT FEMUR$|^RIGHT FOOT$|^RIGHT HAND$|^RIGHT HEEL$|^RIGHT HIP$|^RIGHT KNEE$|^RIGHT LEG$|^RIGHT SHOULD$|^RIGHT TOE$|^RIGHT WRIST$|^SACRAL$|^SCALP$|^SHOULD$|^SHOULD L$|^SHOULDER$|^SKIN$|^STERNAL$|^STERNUM$|^SYNFL$|^SYNOVIAL FLU$|^SYNOVIUM$|^TENDON$|^THIGH$|^THIGH L$|^THIGH R$|^THIGH, LEFT$|^THIGH, RIGHT$|^THUMB$|^TIBIA$|^TOE$|^TOE R$|^TOENAIL$|^UPPER BACK$|^VERTEBRA$|^VITREOUS FLU$|^WOUND$|^WRIST$|^WRIST L$|^WRIST R$)","Skin and Musculoskeletal",ignore.case=T,x)})
+    
+   # 6. other
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^ABSCESS$|^ADENOID$|^ALLO$|^ALLOGRAFT$|^ASPIRATE$|^ASPIRATED SP$|^ASPSPT$|^BF$|^BIOPSY$|^BLAD$|^BLISTER$|^BODY FLUID$|^BRBR$|^BUCCAL$|^CATHETER TIP$|^CERVICAL$|^CYST$|^CYST FLUID$|^DIALYS$|^DIALYSATE$|^DISCHARGE$|^DONOR$|^DR$|^DRAIN$|^DRAINAGE$|^EPIDURAL$|^EXUDATE$|^FB$|^FB CATH$|^FETUS$|^FISTULA$|^FLUID$|^FOREIGN BODY$|^GRAFT$|^GUNSHOT$|^HEMATOMA$|^INCISION$|^JACKSON PRAT$|^JP$|^LEFT TONSIL$|^LESION$|^LINE$|^LOBE$|^LUMBAR$|^MASS$|^MAST$|^MUCUS$|^NODULE$|^OTHER$|^PACE W$|^PACEMAKER$|^PACEMAKER LE$|^PACEMAKER PO$|^PARAFL$|^PAROTID$|^PD FLUID$|^PELVIS$|^PERCUTANEOUS$|^PLFL$|^PSCP$|^PUS$|^RIGHT TONSIL$|^SHUNT$|^SPLEEN$|^STUMP$|^SUBDURAL FLU$|^SUPRAPUBIC$|^SWAB OF UNKN$|^TISSUE$|^TONSIL$|^TUBE$|^UR$|^VALVE$|^VENTRI$|^VENTRICULAR$|^VENTRICULAR $|^WND$)","Other",ignore.case=T,x)})
+    
+   # 7. sinus
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^ETHMOID SINU$|^FRONTAL SINU$|^LEFT MAXILLA$|^MASTOID$|^MAXILLAR$|^MAXILLARY$|^MAXILLARY SI$|^NASAL$|^NASO$|^NASOPHARYNX$|^NOSE$|^RIGHT MAXILL$|^SINUS$|^SINUS E$|^SINUS F$|^SINUS ML$|^SINUS MR$)","Sinus",ignore.case=T,x)})
+    
+    
+   # 8. central nervous system
+   
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^BRAIN$|^CEREBROSPINA$|^CSF$|^SPINAL$|^VENTRICULOST$)","Central Nervous System",ignore.case=T,x)})
+    
+   # 9. genitourinary
+   clinical$source_group<-sapply(clinical$source_group,function(x){gsub("(^ENDOMETRIUM$|^ENDOMT$|^KID$|^KIDNEY$|^LEFT KIDNEY$|^NEPHROSTOMY$|^OVARY$|^PERINEPH$|^PERINEPHRIC$|^RIGHT KIDNEY$|^SCROT$|^SCROTUM$|^SEMEN$|^TESTICLE$|^UR CATH$|^URINE$|^URINE, CATHE$|^UTERINE$)","Genitourinary",ignore.case=T,x)})
+
+   New<-Sys.time()
+   New-Old #1.456135 mins
+    
+ # Check all positives
+   
+   positives<-filter(clinical, result=="1")             #get positives
+   length(unique(positives$sample_id))                  #2470 positive records
+   length(unique(positives$source_group))               #10 categories including unknown
+   length(unique(positives$study_id))                   #1520 patients with a positive test
+   
+
+  write.table(clinical, "clinical.txt")
+  #read.table("clinical.txt", sep="\t")
+  
+  
+
+```
+
+## 2. Remove gordonae contaminants /records
+```{r remove_gordonae_contaminants, echo=F, warning=FALSE, include=FALSE, eval=FALSE}
+
+  Old<-Sys.time()
+  
+# Get gordonae cultures
+  
+  gordonae<-filter(positives, species=="gordonae")                                 #get all gordonae cultures
+  nrow(gordonae) #487
+  length(unique(gordonae$study_id)) #399
+  
+# Remove single gordonae cultures
+  
+  contaminants <- gordonae %>% group_by(study_id, source_group) %>% filter(n()==1) #single cultures
+  nrow(contaminants) #357
+  
+  clinicalgood<-filter(clinical, !sample_id %in% contaminants$sample_id)
+  nrow(clinical)                                                                   #61,380
+  nrow(clinicalgood)                                                               #61,023
+
+# Remove gordonae from unknown sites
+  
+  hold<-filter(clinicalgood, species=="gordonae" & source_group=="")$sample_id #hold sample ids
+  clinicalgood<-filter(clinicalgood, !sample_id %in% hold)                     #filter for sample ids not in hold
+  nrow(clinicalgood)                                                           #61,009 #14 records removed
+  
+#357 + 14 = 371 M. gordonae cultures removed
+  
+# check file
+
+  length(unique(clinicalgood$study_id)) #29,789 patients
+  length(unique(clinicalgood$sample_id)) #61,009 records
+  length(unique(filter(clinicalgood, result=="1")$sample_id)) #2099 positives
+  length(unique(filter(clinicalgood, result=="0")$sample_id)) #58910 negatives
+  
+  New<-Sys.time()
+  New-Old #1.382149 secs
+
+  write.table(clinicalgood, "clinicalgood.txt")
+  #clinicalgood<-read.table("clinicalgood.txt", header=T)
+  
+```
+
+## 3. Geocode record addr /records
+```{r geocode_addr, eval=F}
+ # Old<-Sys.time()
+ # 
+ #   #=========Read in files
+ #   culture_addr<-read.csv(file="~/Box Sync/_1_Research/_07_Scripts_and_seqs/_01_Retrospective_study/_01_RMarkdown/addresses_with_study_id.csv", header=TRUE, sep = ",", na.strings="NA", check.names=FALSE, quote="\"", comment.char="", row.names=1)
+ #   nrow(culture_addr) #61,786
+ #   api_key<-scan(file="Google_API_key.txt", what="")
+ #   api_key<-api_key[5]
+ # 
+ #   #=========Geocode culture addresses
+ #   # Create empty vectors to hold geocoordinates
+ #   geocode_lat<- numeric(nrow(culture_addr))
+ #   geocode_lon<- numeric(nrow(culture_addr))
+ #   geocode_locationType<-numeric(nrow(culture_addr))
+ #   geocode_address<-numeric(nrow(culture_addr))
+ #   geocode_type<-numeric(nrow(culture_addr))
+ #   geocode_place_id<-numeric(nrow(culture_addr))
+ # 
+ #   # Create a function to geocode data
+ #    getGeoData <- function(location, api_key){
+ #      location <- gsub(' ','+',location)
+ #      geo_data <- getURL(paste("https://maps.googleapis.com/maps/api/geocode/json?address=",location,sprintf("&key=%s",api_key), sep=""))
+ #      geo_data <- fromJSON(geo_data)
+ #      out <- c('lat'=NA,'lng'=NA, 'address' = NA, 'location_type' = NA,'type'= NA, 'place_id'=NA)
+ #      try(out <- c(geo_data$results[[1]]$geometry$location,
+ #                   geo_data$results[[1]]$formatted_address,
+ #                   geo_data$results[[1]]$geometry$location_type,
+ #                   geo_data$results[[1]]$types[1],
+ #                   geo_data$results[[1]]$place_id)) #can use this to reverse geocode addresses to check geocoding
+ #      return(out)
+ #    }
+ # 
+ #   z<-nrow(culture_addr)
+ #   #z<-10
+ # 
+ #    for (i in 1:z){
+ #      location<-paste(culture_addr[i,2],culture_addr[i,4],culture_addr[i,5],culture_addr[i,6])
+ #      location<-lapply(location,function(x){gsub("\\s+"," ",x)})
+ #      geocode<-print(getGeoData(location,api_key))
+ #      geocode_lat[i]<-geocode[1]
+ #      geocode_lon[i]<-geocode[2]
+ #      geocode_locationType[i]<-geocode[3]
+ #      geocode_address[i]<-geocode[4]
+ #      geocode_type[i]<-geocode[5]
+ #      geocode_place_id[i]<-geocode[6]
+ #    }
+ # 
+ #   geocode_lon<-as.data.frame(geocode_lon)
+ #   geocode_lat<-as.data.frame(geocode_lat)
+ #   geocode_locationType<-as.data.frame(geocode_locationType)
+ #   geocode_address<-as.data.frame(geocode_address)
+ #   geocode_type<-as.data.frame(geocode_type)
+ #   geocode_place_id<-as.data.frame(geocode_place_id)
+ # 
+ #   geocoded<-bind_cols(geocode_lon,geocode_lat, geocode_locationType,geocode_address,geocode_type, geocode_place_id)
+ #   geocoded<-bind_cols(culture_addr,geocoded)
+  
+  #=========Check results
+#  nrow(geocoded) #61,786
+#  geocoded_noNA<-geocoded %>% filter(!is.na(geocode_lon))
+#  nrow(geocoded_noNA) #61,362
+#  nogeocode<-geocoded %>% filter(is.na(geocode_lon))
+#  nrow(nogeocode) #424 addresses cannot be geocoded (0.68%)
+#  nrow(nogeocode)/nrow(geocoded)
+  
+#  nrow(filter(geocoded_noNA, geocode_address=="ROOFTOP"))/nrow(geocoded_noNA) #62.4%
+#  nrow(filter(geocoded_noNA, geocode_address=="APPROXIMATE"))/nrow(geocoded_noNA) #1.98%
+#  nrow(filter(geocoded_noNA, geocode_address=="RANGE_INTERPOLATED"))/nrow(geocoded_noNA) #34.2% 
+#  nrow(filter(geocoded_noNA, geocode_address=="GEOMETRIC_CENTER"))/nrow(geocoded_noNA) #%1.48
+  
+#New<-Sys.time()
+#New-Old #time to run the geocoding 7.654527 h
+
+#geocoded<-read.table("geocoded_noNA.txt", header=T) #read in file with geocoded addr #only contains addr that could be geocoded
+#length(unique(geocoded$sample_id)) #61362
+
+```
+## 4. Filter for record addr in cities /records
+```{r, cities}
+
+# Plot Michigan cities
+    
+#   dsn<-getwd()
+#   ogrInfo(dsn=dsn,layer="Minor_Civil_Divisions_Cities__Townships_CITIES")
+   #readOGR("Minor_Civil_Divisions_Cities__Townships_CITIES.shp") #shape file works
+     
+# Read in shape file and specify projection
+     
+#   cities<-readShapePoly("Minor_Civil_Divisions_Cities__Townships_CITIES",proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+   
+ # Transform shape file
+   
+#   cities<-spTransform(cities, CRS("+proj=longlat +datum=WGS84 +no_defs"))
+     
+ # Plot 140 cities in Michigan
+   
+#   plot(cities)
+      
+# # Loop through addr and check against cities polygon
+#   
+#   # Subset geocoded file for records not identified as gordonae contaminants
+#   
+#   geocodedgood<-filter(geocoded, sample_id %in% clinicalgood$sample_id)
+#     
+#   # Parallelize the foreach loop
+#    
+#   Old<-Sys.time()
+#   detectCores() #4
+#   cl<-makeCluster(4)
+#   registerDoParallel(cl)
+#   export.names<-c("SpatialPoints","CRS", "gContains")
+# 
+#   # Foreach loop
+#     
+#   hits<-foreach (i=1:nrow(geocodedgood), .combine="c", .export=export.names) %dopar% {
+#   p<-SpatialPoints(list(geocodedgood$geocode_lon[i],geocodedgood$geocode_lat[i]),proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs"))
+#     if(gContains(cities,p)==TRUE){"hit"} 
+#     else {"nope"}
+#   }
+#     
+#   stopCluster(cl)
+#   New<-Sys.time()
+#   New-Old #hours
+#   
+#   geocodedgood$hits<-hits
+#   geocodedgoodcities<-filter(geocodedgood, hits=="hit") #filter for sample addr inside city limits
+# 
+# # Output file
+# 
+#   write.table(geocodedgoodcities, "geocodedgoodcities.txt")
+#   
+# # Read in file from a previous run
+  
+#  geocodedgoodcities<-read.table("geocodedgoodcities.txt")
+#  length(unique(geocodedgoodcities$sample_id)) #25,256
+
+```
+
+## 5. Get distance to Michigan Medicine /records
+```{r get_subject_distance}
+
+# # Get distance to Michigan Medicine for each sample addr
+#   
+# # Get Michigan Medicine geocoordinates
+#  
+#   MichiganMed<-geocode("1500 E. Medical Center Drive, Ann Arbor, MI", source="google", output="latlon")
+#   MichiganMed<-paste(MichiganMed$lat, MichiganMed$lon,sep="+")
+#   destination<-MichiganMed #rename as destination
+#     
+#   # Set api key
+#     
+#   api_key<-scan(file="Google_API_key.txt", what="")
+#   api_key<-api_key[5]
+#   set.api.key(api_key[5])
+#   
+#   # Run foreach loop    
+#   
+#   Old<-Sys.time()
+#    
+#     # Parallelize foreach loop to make loop faster
+#     
+#      Old<-Sys.time()
+#      detectCores() #4
+#      cl<-makeCluster(4)
+#      registerDoParallel(cl)
+#      export.names<-c("gmapsdistance2", "get.api.key", "xmlParse", "getURL", "xmlChildren", "xmlRoot", "xmlValue")  
+#    
+#     
+#     Old<-Sys.time()
+#     distances<-foreach (i=1:nrow(geocodedgoodcities), .combine="c", .export=export.names) %dopar% {
+#       origin<-paste(geocodedgoodcities$geocode_lat[i],geocodedgoodcities$geocode_lon[i],sep="+")
+#       hold<-gmapsdistance2(origin,destination, mode="driving", key=api_key)
+#       return(hold$Distance)
+#     }
+#     New<-Sys.time() #1.074688 hours
+#     New-Old
+#     stopCluster(cl)
+#     
+#     geocodedgoodcities$distance<-distances #distance returned in meters
+#     geocodedgoodcitiesdist<-geocodedgoodcities #rename
+
+# Output file
+ 
+#     write.table(geocodedgoodcitiesdist,"geocodedgoodcitiesdist.txt", sep="\t")
+    
+# Read in file from a previous run
+    
+#    geocodedgoodcitiesdist<-read.table("geocodedgoodcitiesdist.txt")
+#    length(unique(geocodedgoodcitiesdist$sample_id)) #25256 #length should not change because just added dist
+    
+```
+
+
+## 6. Filter for record addr in DWTP "service areas" /records
+```{r}
+# 
+# # A "service area" is a *city* with known water treatment practices
+# 
+# # Read in service areas
+# 
+#   finalserviceareas<-read.table("finalserviceareas.txt", header=T) #140 service areas
+#   finalserviceareas$SERVICE_AREA_LABEL<-as.character(finalserviceareas$SERVICE_AREA_LABEL) #make the column a character column
+#   nrow(finalserviceareas) #140
+#   
+# # Parallelize the foreach loop
+# 
+#   detectCores() #4
+#   cl<-makeCluster(4)
+#   registerDoParallel(cl)
+# 
+# # Loop through each FIPSCODE in FIPScodes and bin cultures as inside or outside of them
+# 
+#   geocodedgoodcitiesdist$servicearea<-NA #create empty column
+#   z<-nrow(finalserviceareas) #140 cities
+#   
+#   Old<-Sys.time()
+#   export.names<-c("SpatialPoints","CRS", "gContains")
+# 
+# # Plot each shapefile individually and check addresses against it
+# 
+#   # Loop start 
+#   Old<-Sys.time()
+#   
+#   for (i in 1:z){
+#   
+#   # plot the service area
+#   
+#   dsn<-getwd()
+#   print(i)
+#   #print(finalserviceareas$NAME[i])
+#   #print(finalserviceareas$SERVICE_AREA_LABEL[i])
+#   ogrInfo(dsn=dsn,layer=finalserviceareas$SERVICE_AREA_LABEL[i])
+#   
+#   # Read in shape file and specify projection
+#   
+#   suppressWarnings(hold<-readShapePoly(finalserviceareas$SERVICE_AREA_LABEL[i],proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")))
+# 
+#   # Transform shape file
+#   
+#   hold<-spTransform(hold, CRS("+proj=longlat +datum=WGS84 +no_defs"))
+#   
+#   plot(hold)
+#   
+#   #loop through culture results and assign them to a service area
+#   
+#   #foreach returns a vector
+#   
+#   assignments<-foreach (q=1:nrow(geocodedgoodcitiesdist), .combine="c", .export=export.names) %dopar% {  #.combine will return a character vector instead of a list #which is the default in foreach
+#   p<-SpatialPoints(list(geocodedgoodcitiesdist$geocode_lon[q],geocodedgoodcitiesdist$geocode_lat[q]),proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs"))
+#   if(gContains(hold,p)==TRUE){as.character(finalserviceareas$NAME[i])}
+#   else {NA}
+#   }
+#   
+#   newlyassigned<-which(!is.na(assignments))
+#   
+#   geocodedgoodcitiesdist$servicearea[newlyassigned]<-assignments[newlyassigned] #in the next iteration of the loop, only check cultures that haven't been assigned yet
+# }
+#   # Loop stop
+#   stopCluster(cl)
+# 
+#   New<-Sys.time()
+#   New-Old
+#   
+# # Rename file
+#   #save<-geocodedgoodcitiesdist
+#   geocodedgoodcitiesdistwater<-geocodedgoodcitiesdist #has servicearea assignments
+#   
+# # Check files
+# 
+#   nrow(filter(geocodedgoodcitiesdistwater, !is.na(servicearea))) #23259
+#   nrow(filter(geocodedgoodcitiesdistwater, is.na(servicearea))) #1997 (8.6% unassigned)
+#   length(unique(geocodedgoodcitiesdistwater$servicearea)) #141 service areas (140 not including NA)
+#   
+# # Output file with all assignments (inclduding NA)
+# 
+#   write.table(geocodedgoodcitiesdistwater,"geocodedgoodcitiesdistwater.txt", sep="\t")
+#   
+# # Read in file from previous run
+   
+#  geocodedgoodcitiesdistwater<-read.table("geocodedgoodcitiesdistwater.txt", sep="\t")
+#  length(unique(geocodedgoodcitiesdistwater$sample_id)) #25256
+  
+# Remove records without assignments
+  
+#  geocodedgoodcitiesdistwater<-filter(geocodedgoodcitiesdistwater, !is.na(servicearea)) #remove NA
+#  length(unique(geocodedgoodcitiesdistwater$sample_id)) #23259
+
+```
+
+## 7. Filter record addr by distance /records
+```{r}
+  
+# Max distance traveled from chloramine city
+
+#  chloramine<-filter(geocodedgoodcitiesdistwater, 
+#                       servicearea=="Ann Arbor" | 
+#                       servicearea=="Lansing" | 
+#                       servicearea=="East Lansing") #chloramine cities
+#  nrow(chloramine)
+#  max(chloramine$distance) #112,973 m (70.2 mi)
+  
+# Filter for patients with distances less than or equal to 80 mi (128,748 m)
+  
+#  geocodedgoodcitiesdistwaterclose<-filter(geocodedgoodcitiesdistwater, distance<128748 | distance==128748) 
+#  nrow(geocodedgoodcitiesdistwaterclose)                       #20,133
+#  length(unique(geocodedgoodcitiesdistwaterclose$servicearea)) #102 service areas
+
+
+# Output file  
+  
+# write.table(geocodedgoodcitiesdistwaterclose, "geocodedgoodcitiesdistwaterclose.txt")
+
+# Read in from previous run
+geocodedgoodcitiesdistwaterclose<-read.table("geocodedgoodcitiesdistwaterclose.txt", header=T) #read in file generated previously
+length(unique(geocodedgoodcitiesdistwaterclose$sample_id)) #20,133
+```
+## 8. Remove Flint records from 2014-2015 /records
+```{r}
+  
+  # Get Flint record ids
+
+  flint_sampleids<-filter(geocodedgoodcitiesdistwaterclose, servicearea=="Flint")
+  flint_sampleids<-flint_sampleids$sample_id
+  
+  # Get Flint record ids from 2014-2015
+
+  flintclinical<-filter(clinicalgood, sample_id %in% flint_sampleids)
+  removeflintsampleids<-filter(flintclinical, sample_year==2014 | sample_year==2015)$sample_id
+  length(removeflintsampleids) #75
+  
+  # Remove these from clinical file
+  
+  nrow(clinicalgood) #61009
+  clinicalgoodflint<-filter(clinicalgood, !sample_id %in% removeflintsampleids)
+  nrow(clinicalgoodflint) #60934 #75 records removed
+  
+```
+
+## 9. Remove E. Lansing records from 2000 /records
+```{r}
+  # Get East Lansing record ids
+
+  eastlansingsampleids<-filter(geocodedgoodcitiesdistwaterclose, servicearea=="East Lansing")$sample_id #143
+  
+  # Get record ids from year 2000
+
+  eastlansingclinical<-filter(clinicalgoodflint, sample_id %in% eastlansingsampleids)
+  removeeastlansingsampleids<-filter(eastlansingclinical, sample_year==2000)$sample_id #year 2000 is when E. Lansing converted from chlorine to chloramine
+  length(removeeastlansingsampleids) #3
+  
+  # Remove these from clinical file
+  
+  nrow(clinicalgoodflint) #60,934
+  clinicalgoodflintlansing<-filter(clinicalgoodflint, !sample_id %in% removeeastlansingsampleids)
+  nrow(clinicalgoodflintlansing) #60,931 #3 records removed
+  
+  
+  clinicalgood<-clinicalgoodflintlansing #replace original file
+  length(unique(clinicalgood$sample_id)) #60,931
+```
+
+
+
+
+
+## 10. Filtering done. Subset clinical file /records
+```{r}
+
+# Subset
+
+  clinicalgoodsubset<-filter(clinicalgood, sample_id %in% geocodedgoodcitiesdistwaterclose$sample_id)
+  nrow(clinicalgoodsubset) #20,055
+  nrow(geocodedgoodcitiesdistwaterclose) #20,133 #78 off represents 75 flint and 3 E. lansing records removed from clinical file
+
+# Add distance from geocoded file
+
+  distcut<-select(geocodedgoodcitiesdistwaterclose, sample_id, distance)
+  clinicalgoodsubset$sample_id<-as.character(clinicalgoodsubset$sample_id) #convert to character
+  distcut$sample_id<-as.character(distcut$sample_id) #convert to character
+
+  clinicalgoodsubsetdist<-right_join(distcut, clinicalgoodsubset, by="sample_id" )
+  length(unique(clinicalgoodsubsetdist$sample_id)) #20,055 records
+  
+# Output
+  
+  write.table(clinicalgoodsubsetdist, "clinicalgoodsubsetdist.txt")
+  #clinicalgoodsubsetdist<-read.table("clinicalgoodsubsetdist.txt")
+
+```
+
+
+# Get cohort for analysis
+## 1. Reduce dataset to patients /patients
+```{r get_patients, echo=F, warning=F, include=F, eval=F}
+
+  Old<-Sys.time()
+ 
+# Get first positives
+ 
+  positives<-filter(clinicalgoodsubsetdist, result=="1")
+  nrow(positives) #892
+  firstpositives<-do.call(rbind, unname(by(positives, positives$study_id, function(x) x[x$age == min(x$age),]))) #get first positives
+  firstpositives<-firstpositives %>% group_by(study_id, sample_year, age) %>% filter(row_number()==1) #Remove duplicate first positives
+  nrow(firstpositives) #468 first positives
+  
+# Get neverpositive patients
+
+  positive_subject_ids<-unique(filter(clinicalgoodsubsetdist, result=="1")$study_id)
+  negative_subject_ids<-unique(filter(clinicalgoodsubsetdist, result=="0")$study_id)
+   
+  positivewithnegative<-as.data.frame(intersect(positive_subject_ids, negative_subject_ids)) #patients with positive and negative records
+  nrow(distinct(positivewithnegative)) #311 patients with positive and negative cultures
+   
+  neverpositive<-setdiff(negative_subject_ids, positive_subject_ids) #patients with negative cultures only
+  length(neverpositive) #9,427
+  negatives<-filter(clinicalgoodsubsetdist, study_id %in% neverpositive) #get negative cultures from neverpositive patients
+  nrow(negatives) #17,840
+
+# Randomly select a negative test for each neverpositive patient
+# Do this ten times and show the test site distribution range
+
+  z<-length(neverpositive)
+  randomlyselected<-NA
+  Old<-Sys.time()
+  for (i in 1:z){ #loop through each study id in negatives and randomly select a row
+   hold<-filter(negatives, study_id==neverpositive[i])
+   selected<-hold[sample(nrow(hold), 1), ] #sample is for random selection
+   randomlyselected<-rbind(randomlyselected, selected)
+  }
+
+    
+  New<-Sys.time()
+  New-Old #Time difference of 1.387492 mins
+   
+# Format
+   
+  randomlyselected<-randomlyselected[2:nrow(randomlyselected),]
+  rownames(randomlyselected)<-1:nrow(randomlyselected) #reset the rownames
+  nrow(randomlyselected) #9,427 rows
+ 
+# Combine firstpositives and randomlyselected negatives  
+ 
+  firstpositivesrandomnegatives<-bind_rows(firstpositives, randomlyselected)
+   
+# Check files
+   
+  nrow(firstpositivesrandomnegatives) #9895 patients
+  nrow(filter(firstpositivesrandomnegatives, result=="1")) #468 positive patients
+  nrow(filter(firstpositivesrandomnegatives, result=="0")) #9,427 negative patients
+   
+# Output file
+  
+  write.table(firstpositivesrandomnegatives, "firstpositivesrandomnegatives.txt", sep="\t")
+  #firstpositivesrandomnegatives<-read.table("firstpositivesrandomnegatives.txt")
+  nrow(firstpositivesrandomnegatives) #9895
+
+```
+
+## 2. Code records as from a predisposed patient (1) or not (0)
+```{r assign_immune_status, echo=F, warning=F, include=F, eval=F}
+ 
+Old<-Sys.time()
+
+# Read in ICD codes
+
+  ICDcodes<-read.table("ICDcodesused.txt", header=T)
+
+# Read in patient diagnoses
+
+  diagnoses<-read.csv("deided_diagnosis_codes.csv", header=T, row.names=1)
+  length(unique(diagnoses$study_id)) #29,494 patients 
+                                     #448 fewer patients than clinical file 
+                                     #We did not have diagnoses codes for these 448
+  
+  
+  #patients
+  diagnoses$diagnosis_code<-as.character(diagnoses$diagnosis_code) #convert to character format
+  
+  
+# Format diagnosis codes to make compatible with AHRQ ICD9 and ICD10 codes
+  
+  # Remove periods
+    
+  diagnoses$diagnosis_code_reformat<-sapply(diagnoses$diagnosis_code,function(x){gsub("[.]","",ignore.case=T,x)}) #remove periods
+
+  # For numbers with 2 digits, add a leading zero
+  
+  for (i in 1:nrow(diagnoses)){
+    if (nchar(diagnoses$diagnosis_code_reformat[i])==2){diagnoses$diagnosis_code_reformat[i]<-paste(0, diagnoses$diagnosis_code_reformat[i], sep="")}}
+
+  diagnoses$diagnosis_code_reformat<-stri_pad_right(diagnoses$diagnosis_code_reformat, 5, "0") #add trailing zeros to make length 5
+
+# Loop through unique study ids
+
+  # Get unique study ids
+  
+  study_ids<-distinct(select(diagnoses, study_id))
+  nrow(study_ids) #29,494 unique study ids
+
+## Do nested for loop to code each specimen as from a predisposed patient or not
+  
+  z<-nrow(study_ids)
+  Oldloop<-Sys.time()
+  firstpositivesrandomnegatives$predisposed<-NA
+  
+  for (i in 1:z){ #loop through each study id
+    print(i)
+    study_id<-filter(diagnoses, study_id==study_ids[i,1]) #filter for all codes from a given study id
+    year_codes<-select(study_id, encounter_year, diagnosis_code_reformat) #select year and codes columns
+    #print(i)
+    year_codes$predisposed<-NA
+   
+    for (q in 1:nrow(year_codes)){ #for each study id, loop through diagnosis codes
+      #if(length(grep(codes[q], ICDcodes$ICD.code.reformat, ignore.case=T))>0){print("compromised")} else {print("nope")}
+      if(length(grep(year_codes[q,2], ICDcodes$ICD.code.reformat, ignore.case=T))>0){year_codes$predisposed[q]<-"1"} else {year_codes$predisposed[q]<-"0"} #label the year with predisposed codes
+    } 
+    
+    if(length(predisposed_years<-filter(year_codes, predisposed==1)$encounter_year)>0){ 
+      year1<-unique(predisposed_years)-1 #a year preceding the predisposed year
+      year2<-unique(predisposed_years) #the predisposed year
+      year3<-unique(predisposed_years)+1 #one year after
+      year4<-unique(predisposed_years)+2 #two years after
+      predisposed_years<-c(year1,year2,year3,year4) #create vector of predisposed years
+
+      firstpositivesrandomnegatives$predisposed[firstpositivesrandomnegatives$study_id==study_ids[i,1] & firstpositivesrandomnegatives$sample_year %in% predisposed_years]<-"1" #code the cultures from that year, the year prior and two years afterward as predisposed
+    }
+  }
+
+  Newloop<-Sys.time()
+  Newloop-Oldloop #20.51359 mins
+  
+  nrow(filter(firstpositivesrandomnegatives, predisposed=="1")) #3060 second time it was run
+  unique(firstpositivesrandomnegatives$predisposed) #NA and 1
+  
+  firstpositivesrandomnegativespredisposed<-firstpositivesrandomnegatives #rename
+  
+  firstpositivesrandomnegativespredisposed[which(is.na(firstpositivesrandomnegativespredisposed$predisposed)),11]<-"0" #replace NA with 0
+
+  nrow(filter(firstpositivesrandomnegativespredisposed, predisposed=="1"))/nrow(firstpositivesrandomnegativespredisposed) #30.9% patients predisposed
+  nrow(filter(firstpositivesrandomnegativespredisposed, result=="1" & predisposed=="1"))/nrow(filter(firstpositivesrandomnegativespredisposed, result=="1")) #54.5% infected patients predisposed
+
+# Output file
+  
+  #write.table(firstpositivesrandomnegativespredisposed,"firstpositivesrandomnegativespredisposed.txt")
+  
+# Read in from previous run
+  
+  #firstpositivesrandomnegativespredisposed<-read.table("firstpositivesrandomnegativespredisposed.txt")
+
+
+```
+
+
+
+## 3. Add water treatment variables
+```{r}
+
+# Add servicearea assignments
+
+  geocodedgoodcitiesdistwaterclosecut<-select(geocodedgoodcitiesdistwaterclose, sample_id, servicearea)
+  firstpositivesrandomnegativespredisposed$sample_id<- as.character(firstpositivesrandomnegativespredisposed$sample_id) #make character
+  geocodedgoodcitiesdistwaterclosecut$sample_id<- as.character(geocodedgoodcitiesdistwaterclosecut$sample_id) #make character
+  firstposandnegpredisposedservicearea<-right_join(geocodedgoodcitiesdistwaterclosecut, firstpositivesrandomnegativespredisposed, by="sample_id") #join service areas into patients dataset
+
+# Add disinfectant, source water, source water assessment
+  
+  finalserviceareas<-read.table("finalserviceareas.txt")
+  finalserviceareascut<-select(finalserviceareas, NAME, PRIMARY_SOURCE_CODE, SOURCE_WATER_ASSESSMENT, TREATMENT_PROCESS) #select columns
+  colnames(finalserviceareascut)[1]<-"servicearea" #rename column 1
+
+  firstposandnegpredisposedserviceareawater<-right_join(finalserviceareascut, firstposandnegpredisposedservicearea, by="servicearea") 
+
+# Make disinfectant binary (chloramines is 1 and chlorine is 0)
+  
+  firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS<-sapply(firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS,function(x){gsub("Chloramines","1",ignore.case=T,x)}) #make binary
+  firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS<-sapply(firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS,function(x){gsub("Chlorine","0",ignore.case=T,x)}) #make binary
+  firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS<-as.factor(firstposandnegpredisposedserviceareawater$TREATMENT_PROCESS) #make factor
+
+# Output file
+  
+  write.table(firstposandnegpredisposedserviceareawater, "firstposandnegpredisposedserviceareawater.txt")
+  #read in file from previous run
+  firstposandnegpredisposedserviceareawater<-read.table("firstposandnegpredisposedserviceareawater.txt", header=T)
+  #nrow(firstposandnegpredisposedserviceareawater) #9895
+```
+
+## 4. Add other city variables
+```{r}
+
+# Get city pop density, median income, percent white, median age data from 2010 US Census
+
+  # Population density
+  
+  pop_density<-read.csv("POP_DENSITY.csv", header=TRUE)
+  pop_density<-separate(pop_density, Geography, c("Minor", "County"), sep=",") #separate geography into minor (city/township), County and State
+  pop_density<-select(pop_density, Minor, County, Population, Pop_density_per_sq_mi_land_area)
+  pop_density<-na.omit(pop_density)
+  pop_density<-(pop_density %>% group_by(Minor) %>% summarise(max_pop_density=max(Pop_density_per_sq_mi_land_area))) #Take max value if multiple rows for a city
+  nrow(pop_density)
+  length(unique(pop_density$Minor))
+
+  # Median household income
+  
+  medincome<-read.csv("MEDIAN_HOUSEHOLD_INCOME.csv", header=TRUE)
+  medincome<-separate(medincome, Geography, c("Minor", "County", "State"), sep=",") #separate geography into minor (city/township), County and State
+  medincome<-select(medincome, Minor, County, Estimate_2015_dollars)
+  medincome$Estimate_2015_dollars<-as.numeric(as.character(medincome$Estimate_2015_dollars))
+  medincome<-filter(medincome, !is.na(Estimate_2015_dollars))
+  medincome<-na.omit(medincome)
+  medincome<-medincome %>% group_by(Minor) %>% summarise(max_income=max(Estimate_2015_dollars)) #Take max value if multiple rows for a city
+  nrow(medincome)
+  length(unique(medincome$Minor))
+  
+  # Percent white
+  
+  race<-read.csv("RACE_AND_HISPANIC_OR_LATINO_ORIGIN.csv", header=TRUE)
+  race<-separate(race, Geography, c("Minor", "County", "State"), sep=",") #separate geography into minor (city/township), County and State
+  race<-select(race, Minor, Percent..RACE...Total.population...One.race...White)
+  colnames(race)<-c("Minor", "Percent_white")
+  race$Percent_white<-as.character(race$Percent_white)
+  race$Percent_white<-as.numeric(race$Percent_white)
+  race<-na.omit(race) #remove NAs
+  race<-race %>% group_by(Minor) %>% summarise(Percent_white=max(Percent_white))
+
+  # Percent pop over 65 years old
+  
+  percent_age<-read.csv("PERCENT_AGE.csv", header=TRUE)
+  percent_age<-separate(percent_age, Geography, c("Minor", "County", "State"), sep=",") #separate geography into minor (city/township), County and State
+  percent_age<-select(percent_age, Minor, Sum) #keep percent population above 65 years old
+  percent_age<-na.omit(percent_age)
+  percent_age<-percent_age %>% group_by(Minor) %>% summarise(max_percent_above_65_years_old=max(Sum))
+  nrow(percent_age)
+  length(unique(percent_age$Minor))
+
+# Rename Dexter township as Dexter city because the township became a city in 2014
+  pop_density$Minor<-sapply(pop_density$Minor,function(x){gsub("Dexter township","Dexter city",ignore.case=T,x)})
+  medincome$Minor<-sapply(medincome$Minor,function(x){gsub("Dexter township","Dexter city",ignore.case=T,x)})
+  race$Minor<-sapply(race$Minor,function(x){gsub("Dexter township","Dexter city",ignore.case=T,x)})
+  percent_age$Minor<-sapply(percent_age$Minor,function(x){gsub("Dexter township","Dexter city",ignore.case=T,x)})
+
+# Join files
+  # Create a Minor column
+  firstposandnegpredisposedserviceareawater$Minor<-paste(firstposandnegpredisposedserviceareawater$servicearea, "city", sep=" ") #add city
+
+  # Format some city names
+    
+  firstposandnegpredisposedserviceareawater$Minor<-sapply(firstposandnegpredisposedserviceareawater$Minor,function(x){gsub("St Clair Shores","St. Clair Shores",ignore.case=T,x)})
+  firstposandnegpredisposedserviceareawater$Minor<-sapply(firstposandnegpredisposedserviceareawater$Minor,function(x){gsub("Mt Clemens","Mount Clemens",ignore.case=T,x)})
+    firstposandnegpredisposedserviceareawater$Minor<-sapply(firstposandnegpredisposedserviceareawater$Minor,function(x){gsub("The Village of Grosse Pointe Shores A Michigan City","Village of Grosse Pointe Shores",ignore.case=T,x)})
+  
+  firstposandneg.predisposed.servicearea.water<-firstposandnegpredisposedserviceareawater #rename file for legibility
+  
+  # Join
+  firstposandneg.predisposed.servicearea.water.pop<-right_join(pop_density, firstposandneg.predisposed.servicearea.water, by="Minor") #pop density
+  firstposandneg.predisposed.servicearea.water.pop.income<-right_join(medincome, firstposandneg.predisposed.servicearea.water.pop, by="Minor") #median income
+  firstposandneg.predisposed.servicearea.water.pop.income.race<-right_join(race, firstposandneg.predisposed.servicearea.water.pop.income, by="Minor") #percent black
+  firstposandneg.predisposed.servicearea.water.pop.income.race.age<-right_join(percent_age,firstposandneg.predisposed.servicearea.water.pop.income.race, by="Minor") #age
+  
+  nrow(firstposandneg.predisposed.servicearea.water.pop.income.race.age) #9895
+  #write.table(firstposandneg.predisposed.servicearea.water.pop.income.race.age,"savethis.txt")
+  #firstposandneg.predisposed.servicearea.water.pop.income.race.age<-read.table("savethis.txt") #START HERE
+
+```
+
+
+# Analysis
+## 1. glm model
+```{r}
+ # Make df for modeling
+
+  formod<-select(firstposandneg.predisposed.servicearea.water.pop.income.race.age, #select specific columns
+                   distance, 
+                   max_percent_above_65_years_old, 
+                   Percent_white, 
+                   max_income, 
+                   max_pop_density, 
+                   servicearea,
+                   SOURCE_WATER_ASSESSMENT,
+                   PRIMARY_SOURCE_CODE, 
+                   TREATMENT_PROCESS, 
+                   sample_id, 
+                   study_id, 
+                   result, 
+                   sample_year, 
+                   sex, 
+                   age, 
+                   predisposed) 
+
+# Rename columns
+
+  colnames(formod)<-c("distance",
+                        "percent_above_65_years_old", 
+                        "percent_white", 
+                        "med_income", 
+                        "pop_density", 
+                        "servicearea",
+                        "source_water_assessment",
+                        "source_water", 
+                        "disinfectant", 
+                        "sample_id",
+                        "study_id", 
+                        "result", 
+                        "sample_year", 
+                        "sex", 
+                        "age", 
+                        "predisposed")
+  
+# check for NAs
+
+  nrow(formod)                    #9895
+  formod <- na.omit(formod)       #remove NAs
+  nrow(formod)                    #9895
+  nrow(filter(formod, result==1)) #468 positives
+  nrow(filter(formod, result==0)) #9427 negatives
+  
+  #write.table(formod, "formod.txt")
+  #formod<-read.table("formod.txt")
+  
+
+  
+########### glm model
+
+    mod<-glm(result ~ age + sex + predisposed             #individual characteristics
+         + log(med_income) 
+         + percent_white 
+         + pop_density 
+         + percent_above_65_years_old                     #other city variables
+         + disinfectant + source_water                    #water variables of interest
+         + sample_year + distance,                        #other variables
+         data=formod,
+         family="binomial")
+  
+         summary(mod)
+         
+         AIC(mod) #3627.071
+
+#Coefficients:
+#                             Estimate Std. Error z value Pr(>|z|)    
+#(Intercept)                 3.179e+01  2.159e+01   1.473  0.14083    
+#age                         6.369e-03  2.389e-03   2.666  0.00768 ** 
+#sexM                       -1.776e-01  9.609e-02  -1.848  0.06456 .  
+#predisposed1                1.079e+00  9.738e-02  11.082  < 2e-16 ***
+#log(med_income)             1.808e-01  2.170e-01   0.833  0.40475    
+#percent_white               5.966e-03  3.190e-03   1.870  0.06143 .  
+#pop_density                 9.222e-05  4.620e-05   1.996  0.04594 *  
+#percent_above_65_years_old -8.582e-03  1.831e-02  -0.469  0.63925    
+#disinfectant1               2.032e-01  1.671e-01   1.216  0.22407    
+#source_waterSW              3.816e-01  1.793e-01   2.128  0.03331 *  
+#sample_year                -1.916e-02  1.070e-02  -1.790  0.07345 .  
+#distance                   -4.652e-07  2.144e-06  -0.217  0.82825   
+
+             
+########### Model with interacting terms
+       
+#disinfectant*source_water
+       
+    mod<-glm(result ~ age + sex + predisposed                 #individual characteristics
+         + log(med_income) 
+         + percent_white 
+         + pop_density 
+         + percent_above_65_years_old                         #other city variables
+         + disinfectant*source_water                          #water variables of interest
+         + sample_year + distance,                            #other variables
+         data=formod,
+         family="binomial")
+  
+         summary(mod)
+         
+         AIC(mod) #3628.967 #Interacting disinfectant and source water doesn't improve model
+         
+#pop_density*source_Water
+         
+    mod<-glm(result ~ age + sex + predisposed                 #individual characteristics
+         + log(med_income) 
+         + percent_white 
+         + percent_above_65_years_old                         #other city variables
+         + disinfectant
+         + pop_density*source_water
+         + sample_year + distance,                            #other variables
+         data=formod,
+         family="binomial")
+      
+      summary(mod)
+             
+      AIC(mod) #3628.046 #Interacting population density and source water type does't improve model
+
+
+#This is the full model reported in the manuscript:  
+
+
+  mod<-glm(result ~ age*predisposed + sex #individual characteristics
+      + log(med_income) 
+      + percent_white 
+      + percent_above_65_years_old #other city variables
+      + pop_density 
+      + source_water
+      + disinfectant
+      + sample_year 
+      + distance, #other variables
+      data=formod,
+      family="binomial") #model fit
+      
+      
+      AIC(mod) #3619.015 #Improves the model
+      
+      summary(mod)
+      
+
+#Coefficients:
+#                             Estimate Std. Error z value Pr(>|z|)    
+#(Intercept)                 3.163e+01  2.160e+01   1.464  0.14310    
+#age                         1.369e-02  3.403e-03   4.021 5.79e-05 ***
+#predisposed1                1.897e+00  2.770e-01   6.847 7.52e-12 ***
+#sexM                       -1.778e-01  9.611e-02  -1.850  0.06429 .  
+#log(med_income)             1.682e-01  2.171e-01   0.775  0.43842    
+#percent_white               6.035e-03  3.186e-03   1.894  0.05824 .  
+#percent_above_65_years_old -8.483e-03  1.826e-02  -0.464  0.64231    
+#pop_density                 8.651e-05  4.625e-05   1.871  0.06139 .  
+#source_waterSW              3.771e-01  1.789e-01   2.107  0.03510 *  
+#disinfectant1               1.954e-01  1.674e-01   1.168  0.24300    
+#sample_year                -1.919e-02  1.071e-02  -1.792  0.07316 .  
+#distance                   -8.705e-07  2.151e-06  -0.405  0.68573    
+#age:predisposed1           -1.500e-02  4.740e-03  -3.165  0.00155 **
+
+oddsratios<-exp(mod$coefficients) #odds ratios
+as.data.frame(oddsratios)
+#                             oddsratios
+#(Intercept)                5.475725e+13
+#age                        1.013780e+00
+#predisposed1               6.665143e+00
+#sexM                       8.370880e-01
+#log(med_income)            1.183207e+00
+#percent_white              1.006053e+00
+#percent_above_65_years_old 9.915525e-01
+#pop_density                1.000087e+00
+#source_waterSW             1.458021e+00
+#disinfectant1              1.215821e+00
+#sample_year                9.809948e-01
+#distance                   9.999991e-01
+#age:predisposed1           9.851096e-01
+
+exp(confint(mod))
+
+#                                  2.5 %       97.5 %
+#(Intercept)                2.128175e-05 1.315711e+32
+#age                        1.007136e+00 1.020670e+00
+#predisposed1               3.880854e+00 1.151041e+01
+#sexM                       6.931670e-01 1.010561e+00
+#log(med_income)            7.688474e-01 1.801664e+00
+#percent_white              9.998828e-01 1.012462e+00
+#percent_above_65_years_old 9.550957e-01 1.025736e+00
+#pop_density                9.999957e-01 1.000177e+00
+#source_waterSW             1.034948e+00 2.089681e+00
+#disinfectant1              8.734814e-01 1.683674e+00
+#sample_year                9.606268e-01 1.001826e+00
+#distance                   9.999949e-01 1.000003e+00
+#age:predisposed1           9.759775e-01 9.942905e-01
+
+```
+## 2. Estimate propensity scores
+```{r}
+
+# Modeling disinfectant as a function of observed baseline covariates
+
+  get_pr_score <- glm(disinfectant ~ age*predisposed + sex  #patient characteristics
+      + log(med_income) #city variables
+      + percent_white 
+      + percent_above_65_years_old
+      + pop_density 
+      + source_water
+      + sample_year #other record-specific variables
+      + distance, 
+      data=formod,
+      family="binomial") #model fit
+  #warning: glm.fit: fitted probabilities numerically 0 or 1 occurred 
+
+  formod$pr_score <- predict(get_pr_score, type="response", newdata=formod)  #newdata call to predict using entire dataset
+  
+  hist(formod$pr_score) #histogram of the scores
+  boxplot(formod$pr_score~formod$disinfectant) #not significant overlap between propensity scores #would be difficult to find good matches
+
+  
+```
+
+## 3. Propensity score adjustment /weighting
+```{r}
+
+# Calculate weights
+formod$weights <- 1/(formod$pr_score^formod$disinfectant*(1 - formod$pr_score)^(1-formod$disinfectant))
+hist(formod$weights) #look at weights #put a threshold
+table(formod$weights>10) #set a threshold to 99th percentile 
+quantile(formod$weights, 0.99)#3.922009 
+formod$weights<-pmin(formod$weights, 3.922009) #trimmed weights #replaced high values with the 99th percentile
+
+
+
+# Check balance
+
+
+#age
+summary(lm(age~disinfectant, data=formod))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   50.1372     0.2469 203.081  < 2e-16 *** #2.5 is the difference between average age of the chloramine and the chlorine groups
+#disinfectant   2.4686     0.5220   4.729 2.29e-06 *** 
+summary(lm(age~disinfectant, data=formod, weight=weights))
+#            Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   49.9518     0.2481  201.34  < 2e-16 ***
+#disinfectant   1.9791     0.5127    3.86 0.000114 ***
+
+#sex
+summary(lm(as.numeric(sex=="M")~disinfectant, data=formod))
+#              Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   0.525384   0.005699  92.189  < 2e-16 ***
+#disinfectant -0.040522   0.012051  -3.363 0.000775 ***
+
+summary(lm(as.numeric(sex=="M")~disinfectant, data=formod, weight=weights))
+#              Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   0.526594   0.005738  91.778  < 2e-16 ***
+#disinfectant -0.036538   0.011858  -3.081  0.00207 **
+
+#predisposed
+summary(lm(predisposed~disinfectant, data=formod))
+#              Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   0.331945   0.005252  63.208   <2e-16 ***
+#disinfectant -0.101488   0.011105  -9.139   <2e-16 ***
+summary(lm(predisposed~disinfectant, data=formod, weight=weights))
+#              Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   0.328827   0.005282  62.248   <2e-16 ***
+#disinfectant -0.091315   0.010917  -8.364   <2e-16 ***
+
+#median income
+summary(lm(med_income~disinfectant, data=formod))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   49373.0      200.3  246.53   <2e-16 ***
+#disinfectant   4719.7      423.5   11.14   <2e-16 ***
+summary(lm(med_income~disinfectant, data=formod, weight=weights))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   49737.7      202.8 245.237   <2e-16 ***
+#disinfectant   3585.5      419.2   8.554   <2e-16 ***
+
+#percent white
+summary(lm(percent_white~disinfectant, data=formod))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   72.5254     0.2621  276.68   <2e-16 ***
+#disinfectant  -0.5319     0.5543   -0.96    0.337 
+summary(lm(percent_white~disinfectant, data=formod, weight=weights))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   72.7435     0.2606 279.168   <2e-16 ***
+#disinfectant  -1.1604     0.5385  -2.155   0.0312 *
+
+
+#percent_above_65_years_old
+summary(lm(percent_above_65_years_old~disinfectant, data=formod))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)  13.81829    0.03889  355.36   <2e-16 ***
+#disinfectant -4.52588    0.08223  -55.04   <2e-16 ***
+
+summary(lm(percent_above_65_years_old~disinfectant, data=formod, weight=weights))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)  13.54535    0.03949  342.99   <2e-16 ***
+#disinfectant -4.22273    0.08162  -51.74   <2e-16 ***
+
+
+#population density
+summary(lm(pop_density~disinfectant, data=formod))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   3349.78      13.73  243.89   <2e-16 ***
+#disinfectant   673.31      29.04   23.18   <2e-16 ***
+summary(lm(pop_density~disinfectant, data=formod, weight=weights))
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   3376.25      14.83   227.6   <2e-16 ***
+#disinfectant   616.12      30.66    20.1   <2e-16 ***
+
+#source water
+summary(lm(as.numeric(source_water=="SW")~disinfectant, data=formod)) #-0.035533 #0.831164 83% of the control group have SW #3.5% more people in chloramine group have SW
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)  0.831164   0.004189 198.408  < 2e-16 ***
+#disinfectant 0.035533   0.008858   4.011 6.08e-05 ***
+summary(lm(as.numeric(source_water=="SW")~disinfectant, data=formod, weight=weights)) #0.017543 #82% of the control group have SW
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)  0.815210   0.004419 184.463   <2e-16 ***
+#disinfectant 0.017543   0.009133   1.921   0.0548 .
+
+#sample year
+summary(lm(sample_year~disinfectant, data=formod))
+#              Estimate Std. Error  t value Pr(>|t|)    
+#(Intercept)  2.008e+03  5.132e-02 39123.25   <2e-16 ***
+#disinfectant 2.066e-02  1.085e-01     0.19    0.849 
+summary(lm(sample_year~disinfectant, data=formod, weight=weights))
+#              Estimate Std. Error   t value Pr(>|t|)    
+#(Intercept)  2.008e+03  5.165e-02 38873.789   <2e-16 ***
+#disinfectant 1.786e-02  1.067e-01     0.167    0.867 
+
+#distance
+summary(lm(distance~disinfectant, data=formod)) #-39963.3 
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   58230.1      296.0  196.73   <2e-16 ***
+#disinfectant -39963.3      625.9  -63.85   <2e-16 ***
+summary(lm(distance~disinfectant, data=formod, weight=weights)) #-35559.0
+#             Estimate Std. Error t value Pr(>|t|)    
+#(Intercept)   57236.3      312.3  183.25   <2e-16 ***
+#disinfectant -35559.0      645.5  -55.09   <2e-16 ***
+
+
+# glm model incorporating weights
+  mod<-glm(result ~ age*predisposed + sex #patient characteristics
+      + log(med_income) #city variables
+      + percent_white 
+      + percent_above_65_years_old
+      + pop_density
+      + source_water
+      + disinfectant
+      + sample_year #other variables
+      + distance,
+      weight=weights, #refit the model using weights
+      data=formod,
+      family="binomial")
+      
+      summary(mod)
+      
+#Coefficients:
+#                             Estimate Std. Error z value Pr(>|z|)    
+#(Intercept)                 3.427e+01  2.080e+01   1.647 0.099465 .  
+#age                         1.521e-02  3.326e-03   4.572 4.83e-06 ***
+#predisposed                 2.028e+00  2.675e-01   7.581 3.44e-14 ***
+#sexM                       -1.699e-01  9.241e-02  -1.838 0.065995 .  
+#log(med_income)             2.645e-01  2.061e-01   1.283 0.199428    
+#percent_white               5.411e-03  3.110e-03   1.740 0.081850 .  
+#percent_above_65_years_old -1.297e-02  1.708e-02  -0.760 0.447457    
+#pop_density                 1.297e-04  3.992e-05   3.250 0.001154 ** 
+#source_waterSW              2.132e-01  1.544e-01   1.381 0.167275    
+#disinfectant                1.022e-01  1.465e-01   0.698 0.485152    
+#sample_year                -2.100e-02  1.031e-02  -2.036 0.041741 *  
+#distance                   -1.556e-06  2.000e-06  -0.778 0.436632    
+#age:predisposed            -1.670e-02  4.583e-03  -3.643 0.000269 ***
+
+oddsratios<-exp(mod$coefficients)
+as.data.frame(oddsratios)
+#                             oddsratios
+#(Intercept)                7.648814e+14
+#age                        1.015321e+00
+#predisposed                7.596190e+00
+#sexM                       8.437545e-01
+#log(med_income)            1.302791e+00
+#percent_white              1.005426e+00
+#percent_above_65_years_old 9.871119e-01
+#pop_density                1.000130e+00
+#source_waterSW             1.237584e+00
+#disinfectant               1.107638e+00
+#sample_year                9.792222e-01
+#distance                   9.999984e-01
+#age:predisposed            9.834425e-01
+
+#exp(confint(mod))
+#                                 2.5 %       97.5 %
+#(Intercept)                0.001435277 3.836589e+32
+#age                        1.008815907 1.022061e+00
+#predisposed                4.508414853 1.287881e+01
+#sexM                       0.703816150 1.011271e+00
+#log(med_income)            0.865732086 1.943207e+00
+#percent_white              0.999406276 1.011675e+00
+#percent_above_65_years_old 0.953466628 1.019233e+00
+#pop_density                1.000050796 1.000207e+00
+#source_waterSW             0.919949313 1.686161e+00
+#disinfectant               0.829486664 1.473159e+00
+#sample_year                0.959634575 9.992362e-01
+#distance                   0.999994474 1.000002e+00
+#age:predisposed            0.974624021 9.922981e-01
+
+```
+
+
+
+
+## 4. Get values for tables
+
+```{r}
+
+# Get table of species for positives #table 1
+   
+   speciescounts<-filter(firstpositivesrandomnegatives, result==1) %>% group_by(species) %>% summarise(n = n())
+   speciescounts$percent<-speciescounts$n/sum(speciescounts$n)*100
+   speciescountstable<-speciescounts
+
+  
+  #write out table
+  write.xlsx(as.data.frame(arrange(speciescountstable, desc(n))), "speciescountstable.xlsx")
+   
+  # Get source groups #TABLE 1
+   
+   #for positives
+   sourcecounts         <- filter(firstpositivesrandomnegatives, result==1) %>% group_by(source_group) %>% summarise(n = n())
+   sourcecounts$percent <- sourcecounts$n/sum(sourcecounts$n)*100
+   sourcegrouptable     <- sourcecounts
+   
+   #for negatives
+   sourcecounts         <- filter(firstpositivesrandomnegatives, result==0) %>% group_by(source_group) %>% summarise(n = n())
+   sourcecounts$percent <- sourcecounts$n/sum(sourcecounts$n)*100
+   sourcegrouptable     <- sourcecounts
+   
+   tosummarize<-firstposandneg.predisposed.servicearea.water.pop.income.race.age
+   tosummarizepositives<-filter(tosummarize, result==1)
+   tosummarizenegatives<-filter(tosummarize, result==0)
+   
+   mean(tosummarize$age) #50.7
+   sd(tosummarize$age) #21.7
+   
+   mean(tosummarizepositives$age)
+   sd(tosummarizepositives$age)
+   
+   mean(tosummarizenegatives$age)
+   sd(tosummarizenegatives$age)
+
+   # get source groups for positive patients
+   sourcecounts<-filter(tosummarize, result==1) %>% group_by(source_group) %>% summarise(n = n())
+   sourcecounts$percent<-sourcecounts$n/sum(sourcecounts$n)*100
+   sourcegrouptable<-sourcecounts
+   
+   # get source groups for negative patients
+   sourcecounts<-filter(tosummarize, result==0) %>% group_by(source_group) %>% summarise(n = n())
+   sourcecounts$percent<-sourcecounts$n/sum(sourcecounts$n)*100
+   sourcegrouptable<-sourcecounts
+
+
+#predisposed
+
+      predisposedpos<-tosummarizepositives %>% group_by(predisposed) %>% summarise(n = n())
+      predisposedpos$percent<-predisposedpos$n/sum(predisposedpos$n)*100
+      
+      predisposedneg<-tosummarizenegatives %>% group_by(predisposed) %>% summarise(n = n())
+      predisposedneg$percent<-predisposedneg$n/sum(predisposedneg$n)*100
+
+#sex
+      sexpos<-tosummarizepositives %>% group_by(sex) %>% summarise(n = n())
+      sexpos$percent<-sexpos$n/sum(sexpos$n)*100
+      
+      sexneg<-tosummarizenegatives %>% group_by(sex) %>% summarise(n = n())
+      sexneg$percent<-sexneg$n/sum(sexneg$n)*100
+      
+#disinfectant
+   
+      disinfectant<-tosummarize %>% group_by(TREATMENT_PROCESS) %>% summarise(n = n())
+      disinfectant$percent<-disinfectant$n/sum(disinfectant$n)*100
+      
+      disinfectantpos<-tosummarizepositives %>% group_by(TREATMENT_PROCESS) %>% summarise(n = n())
+      disinfectantpos$percent<-disinfectantpos$n/sum(disinfectantpos$n)*100
+      
+      disinfectantneg<-tosummarizenegatives %>% group_by(TREATMENT_PROCESS) %>% summarise(n = n())
+      disinfectantneg$percent<-disinfectantneg$n/sum(disinfectantneg$n)*100
+      
+#surface
+
+   
+      surfacewater<-tosummarize %>% group_by(PRIMARY_SOURCE_CODE) %>% summarise(n = n())
+      surfacewater$percent<-surfacewater$n/sum(surfacewater$n)*100
+      
+      surfacewaterpos<-tosummarizepositives %>% group_by(PRIMARY_SOURCE_CODE) %>% summarise(n = n())
+      surfacewaterpos$percent<-surfacewaterpos$n/sum(surfacewaterpos$n)*100
+      
+      surfacewaterneg<-tosummarizenegatives %>% group_by(PRIMARY_SOURCE_CODE) %>% summarise(n = n())
+      surfacewaterneg$percent<-surfacewaterneg$n/sum(surfacewaterneg$n)*100
+```
